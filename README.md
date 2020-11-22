@@ -1,24 +1,17 @@
-# vue-demo
+# ArcGIS 学习-基于 Vue3.0
 
-## Project setup
+## Project
+
 ```
 npm install
-```
-
-### Compiles and hot-reloads for development
-```
 npm run serve
 ```
 
-### Compiles and minifies for production
-```
-npm run build
-```
+See [Vue Composition API](https://composition-api.vuejs.org/zh/)
 
-### Lints and fixes files
-```
-npm run lint
-```
+## ArcGIS
 
-### Customize configuration
-See [Configuration Reference](https://cli.vuejs.org/config/).
+### widget
+
+- Zoom：视图缩放控件
+- Compass：指南针控件

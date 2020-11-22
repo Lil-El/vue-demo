@@ -1,28 +1,35 @@
 <template>
-  <div id="app">
-    <img alt="Vue logo" src="./assets/logo.png">
-    <HelloWorld msg="Welcome to Your Vue.js App"/>
+  <div class="container">
+    <side-bar />
+    <Map />
   </div>
 </template>
 
 <script>
-import HelloWorld from './components/HelloWorld.vue'
-
+import { computed, onMounted, reactive, watch } from "vue";
+import Map from "@/components/Map";
+import SideBar from "@/components/SideBar";
 export default {
-  name: 'App',
-  components: {
-    HelloWorld
-  }
-}
-</script>
+  components: { Map, SideBar },
+  setup() {
+    const state = reactive({
+      widgets: {},
+    });
 
-<style>
-#app {
-  font-family: Avenir, Helvetica, Arial, sans-serif;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  text-align: center;
-  color: #2c3e50;
-  margin-top: 60px;
+    return {
+      state,
+    };
+    /**
+     * 父组件传递 return {title:state.title} ({...state} 同理) 子组件 使用title；title不跟随state变化
+     * 父组件传递 return {state}  子组件 使用state；无法触发emit
+     * 父组件传递 return {state}  子组件 使用state.title；title跟随state变化
+     */
+  },
+};
+</script>
+<style lang="scss">
+.container {
+  display: flex;
+  height: 100vh;
 }
 </style>
