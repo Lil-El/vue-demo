@@ -1,10 +1,10 @@
 <template>
   <div class="c" @mousemove="handleResize" @mouseup="handleEnd" @mouseleave="handleEnd">
-    <!-- <Watch /> -->
-    <div class="a"></div>
+    <Watch />
+    <!-- <div class="a"></div>
     <div class="b" ref="container">
       <div class="resize" @mousedown="handleStart"></div>
-    </div>
+    </div> -->
   </div>
 </template>
 

@@ -5,16 +5,20 @@
 </template>
 
 <script>
-import { reactive } from "vue";
+import { reactive, getCurrentInstance } from "vue";
 import Child from "./Child";
 export default {
   components: { Child },
+  provide(){
+    return {provideObj: ()=>this.state.obj}
+  },
   setup() {
     const state = reactive({
-      obj: {},
+      obj: 1,
     });
+    
     setTimeout(() => {
-      state.obj = { a: 1 };
+      state.obj = 2;
     }, 1000);
     return {
       state,
