@@ -233,9 +233,201 @@ const render = (vnode, container) => {
     flushPostFlushCbs();
     container._vnode = vnode; // 更新container的vnode
 };
+ const setupRenderEffect = (instance, initialVNode, container, anchor, parentSuspense, isSVG, optimized) => {
+    // create reactive effect for rendering
+    instance.update = effect(function componentEffect() {
+        if (!instance.isMounted) {
+            let vnodeHook;
+            const { el, props } = initialVNode;
+            const { bm, m, parent } = instance;
+            // beforeMount hook
+            if (bm) {
+                invokeArrayFns(bm);
+            }
+            // onVnodeBeforeMount
+            if ((vnodeHook = props && props.onVnodeBeforeMount)) {
+                invokeVNodeHook(vnodeHook, parent, initialVNode);
+            }
+            // render
+            if ((process.env.NODE_ENV !== 'production')) {
+                startMeasure(instance, `render`);
+            }
+            const subTree = (instance.subTree = renderComponentRoot(instance));
+            if ((process.env.NODE_ENV !== 'production')) {
+                endMeasure(instance, `render`);
+            }
+            if (el && hydrateNode) {
+                if ((process.env.NODE_ENV !== 'production')) {
+                    startMeasure(instance, `hydrate`);
+                }
+                // vnode has adopted host node - perform hydration instead of mount.
+                hydrateNode(initialVNode.el, subTree, instance, parentSuspense);
+                if ((process.env.NODE_ENV !== 'production')) {
+                    endMeasure(instance, `hydrate`);
+                }
+            }
+            else {
+                if ((process.env.NODE_ENV !== 'production')) {
+                    startMeasure(instance, `patch`);
+                }
+                patch(null, subTree, container, anchor, instance, parentSuspense, isSVG);
+                if ((process.env.NODE_ENV !== 'production')) {
+                    endMeasure(instance, `patch`);
+                }
+                initialVNode.el = subTree.el;
+            }
+            // mounted hook
+            if (m) {
+                queuePostRenderEffect(m, parentSuspense);
+            }
+            // onVnodeMounted
+            if ((vnodeHook = props && props.onVnodeMounted)) {
+                queuePostRenderEffect(() => {
+                    invokeVNodeHook(vnodeHook, parent, initialVNode);
+                }, parentSuspense);
+            }
+            // activated hook for keep-alive roots.
+            // #1742 activated hook must be accessed after first render
+            // since the hook may be injected by a child keep-alive
+            const { a } = instance;
+            if (a &&
+                initialVNode.shapeFlag & 256 /* COMPONENT_SHOULD_KEEP_ALIVE */) {
+                queuePostRenderEffect(a, parentSuspense);
+            }
+            instance.isMounted = true;
+        }
+        else {
+            // updateComponent
+            // This is triggered by mutation of component's own state (next: null)
+            // OR parent calling processComponent (next: VNode)
+            let { next, bu, u, parent, vnode } = instance;
+            let originNext = next;
+            let vnodeHook;
+            if ((process.env.NODE_ENV !== 'production')) {
+                pushWarningContext(next || instance.vnode);
+            }
+            if (next) {
+                updateComponentPreRender(instance, next, optimized);
+            }
+            else {
+                next = vnode;
+            }
+            next.el = vnode.el;
+            // beforeUpdate hook
+            if (bu) {
+                invokeArrayFns(bu);
+            }
+            // onVnodeBeforeUpdate
+            if ((vnodeHook = next.props && next.props.onVnodeBeforeUpdate)) {
+                invokeVNodeHook(vnodeHook, parent, next, vnode);
+            }
+            // render
+            if ((process.env.NODE_ENV !== 'production')) {
+                startMeasure(instance, `render`);
+            }
+            const nextTree = renderComponentRoot(instance);
+            if ((process.env.NODE_ENV !== 'production')) {
+                endMeasure(instance, `render`);
+            }
+            const prevTree = instance.subTree;
+            instance.subTree = nextTree;
+            // reset refs
+            // only needed if previous patch had refs
+            if (instance.refs !== EMPTY_OBJ) {
+                instance.refs = {};
+            }
+            if ((process.env.NODE_ENV !== 'production')) {
+                startMeasure(instance, `patch`);
+            }
+            patch(prevTree, nextTree, 
+            // parent may have changed if it's in a teleport
+            hostParentNode(prevTree.el), 
+            // anchor may have changed if it's in a fragment
+            getNextHostNode(prevTree), instance, parentSuspense, isSVG);
+            if ((process.env.NODE_ENV !== 'production')) {
+                endMeasure(instance, `patch`);
+            }
+            next.el = nextTree.el;
+            if (originNext === null) {
+                // self-triggered update. In case of HOC, update parent component
+                // vnode el. HOC is indicated by parent instance's subTree pointing
+                // to child component's vnode
+                updateHOCHostEl(instance, nextTree.el);
+            }
+            // updated hook
+            if (u) {
+                queuePostRenderEffect(u, parentSuspense);
+            }
+            // onVnodeUpdated
+            if ((vnodeHook = next.props && next.props.onVnodeUpdated)) {
+                queuePostRenderEffect(() => {
+                    invokeVNodeHook(vnodeHook, parent, next, vnode);
+                }, parentSuspense);
+            }
+            if ((process.env.NODE_ENV !== 'production') || __VUE_PROD_DEVTOOLS__) {
+                devtoolsComponentUpdated(instance);
+            }
+            if ((process.env.NODE_ENV !== 'production')) {
+                popWarningContext();
+            }
+        }
+    }, (process.env.NODE_ENV !== 'production') ? createDevEffectOptions(instance) : prodEffectOptions);
+};
 ```
 
 ## <span style="color: red;">ssrApp.mount(container, true) ?</span>
 ## keep-alive
 ## effect
-## reactive
+## LifeCycle Hook
+```javascript
+
+const createHook = (lifecycle) => (hook, target = currentInstance) => 
+!isInSSRComponentSetup && injectHook(lifecycle, hook, target);
+
+const onBeforeMount = createHook("bm" /* BEFORE_MOUNT */);
+
+function injectHook(type, hook, target = currentInstance, prepend = false) {
+    if (target) {
+        const hooks = target[type] || (target[type] = []);
+        const wrappedHook = hook.__weh ||
+            (hook.__weh = (...args) => {
+                if (target.isUnmounted) {
+                    return;
+                }
+                // 在效果中禁用所有生命周期钩子的跟踪。 disable tracking inside all lifecycle hooks inside effects.
+                pauseTracking();
+                // Set currentInstance during hook invocation.
+                // This assumes the hook does not synchronously trigger other hooks, which
+                // can only be false when the user does something really funky.
+                setCurrentInstance(target);
+                const res = callWithAsyncErrorHandling(hook, target, type, args);
+                setCurrentInstance(null);
+                resetTracking();
+                return res;
+            });
+        if (prepend) {
+            hooks.unshift(wrappedHook);
+        }
+        else {
+            hooks.push(wrappedHook);
+        }
+        return wrappedHook;
+    }
+}
+function callWithAsyncErrorHandling(fn, instance, type, args) {
+    if (isFunction(fn)) {
+        const res = callWithErrorHandling(fn, instance, type, args); // 调用fn执行传入args
+        if (res && isPromise(res)) {
+            res.catch(err => {
+                handleError(err, instance, type);
+            });
+        }
+        return res;
+    }
+    const values = [];
+    for (let i = 0; i < fn.length; i++) {
+        values.push(callWithAsyncErrorHandling(fn[i], instance, type, args));
+    }
+    return values;
+}
+```

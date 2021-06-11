@@ -5,7 +5,7 @@
 </template>
 
 <script>
-import { reactive, getCurrentInstance } from "vue";
+import { reactive, onMounted, getCurrentInstance } from "vue";
 import Child from "./Child";
 export default {
   components: { Child },
@@ -16,7 +16,9 @@ export default {
     const state = reactive({
       obj: 1,
     });
-    
+    // onMounted([fn, fn])
+    onMounted(()=>console.log("m1"));
+    onMounted(()=>console.log("m2"));
     setTimeout(() => {
       state.obj = 2;
     }, 1000);
