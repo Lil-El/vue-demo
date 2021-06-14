@@ -1,17 +1,31 @@
 <template>
-  <div>
-    <Watch />
+  <div @click="handleClick">
+    Effect
+    <!-- <Watch /> -->
   </div>
 </template>
 
 <script>
-import Watch from "@/case/Watch/Parent.vue";
+import { reactive } from '@vue/reactivity';
+import { watch } from '@vue/runtime-core';
+// import Watch from "@/case/Watch/Parent.vue";
 export default {
-  components: { Watch },
-  data() {
-  },
-  methods: {
-  },
+  // components: { Watch },
+  setup(){
+    let state = reactive({
+      obj: 1
+    })
+    watch(()=>state.obj, ()=>{
+      console.log('change')
+    })
+    let handleClick = ()=>{
+      state.obj = "yxd";
+      state.obj = "mino";
+    }
+    return {
+      handleClick
+    }
+  }
 };
 </script>
 

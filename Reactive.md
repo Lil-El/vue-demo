@@ -239,22 +239,10 @@ function track(target, type, key) {
     if (!dep.has(activeEffect)) {
         dep.add(activeEffect);
         activeEffect.deps.push(dep);
-        if ((process.env.NODE_ENV !== 'production') && activeEffect.options.onTrack) {
-            activeEffect.options.onTrack({
-                effect: activeEffect,
-                target,
-                type,
-                key
-            });
-        }
     }
 }
 function trigger(target, type, key, newValue, oldValue, oldTarget) {
     const depsMap = targetMap.get(target);
-    if (!depsMap) {
-        // never been tracked
-        return;
-    }
     const effects = new Set();
     const add = (effectsToAdd) => {
         if (effectsToAdd) {
@@ -312,17 +300,6 @@ function trigger(target, type, key, newValue, oldValue, oldTarget) {
         }
     }
     const run = (effect) => {
-        if ((process.env.NODE_ENV !== 'production') && effect.options.onTrigger) {
-            effect.options.onTrigger({
-                effect,
-                target,
-                key,
-                type,
-                newValue,
-                oldValue,
-                oldTarget
-            });
-        }
         if (effect.options.scheduler) {
             effect.options.scheduler(effect);
         }
@@ -332,6 +309,270 @@ function trigger(target, type, key, newValue, oldValue, oldTarget) {
     };
     effects.forEach(run);
 }
+```
+**target和deps存储结构：**
+target = {name: "yyy"};
+reactive(target);
 
+```javascript
+    targetMap(WeakMap): {
+        target: depsMap(new Map())
+    }
+    depsMap(Map): {
+        key: dep(new Set())
+    }
+```
+
+## reactive值在页面的流程
+- 展示：get()
+  当页面使用reactive的值时，触发getter()方法，并进行track()对依赖进行跟踪；
+  内部有一个targetMap，保存着target对象和deps的映射；而depsMap保存着key和deps的映射关系；
+  此时，将activeEffect(renderEffect)存储到key对应的deps（Set）当中。
+- 修改：set()
+  当state的属性值发生变化，进行修改时。触发setter()方法，并执行trigger方法，对这个key的依赖deps进行更新；
+  获取到target的depsMap，再获取key的deps，然后每一个dep（render effect）执行更新。
+
+## 异步更新
+
+接着上面的`修改：set()`，当effect更新的时候，会先执行effect option上的scheduler方法，即queueJob(effect)；
+将effect保存到queue队列当中。并判断队列当中是否已经有了这个effect，没有就加入到队列当中。在本轮事件循环结束时，即在微任务开始，去执行effect的update方法，更新页面。
+
+>nextTick：vue3的nextTick使用promise.then来实现；vue2当中做了兼容处理：使用mutationObserve，setTimeout等
+>vue3使用proxy，所以一定也是支持es6和promise的，所以就不需要对nextTick做兼容处理
+
+```javascript
+let isFlushing = false;
+let isFlushPending = false;
+const queue = [];
+const resolvedPromise = Promise.resolve();
+function nextTick(fn) {
+    const p = currentFlushPromise || resolvedPromise;
+    return fn ? p.then(fn) : p;
+}
+function queueJob(job) {
+    if ((!queue.length || !queue.includes(job, isFlushing && job.allowRecurse ? flushIndex + 1 : flushIndex)) &&
+        job !== currentPreFlushParentJob) {
+        queue.push(job);
+        queueFlush();
+    }
+}
+function queueFlush() {
+    if (!isFlushing && !isFlushPending) {
+        isFlushPending = true;
+        currentFlushPromise = resolvedPromise.then(flushJobs);
+    }
+}
+
+function flushJobs(seen) {
+    isFlushPending = false;
+    isFlushing = true;
+    if ((process.env.NODE_ENV !== 'production')) {
+        seen = seen || new Map();
+    }
+    flushPreFlushCbs(seen); // beforeUpdate
+    queue.sort((a, b) => getId(a) - getId(b));
+    try {
+        for (flushIndex = 0; flushIndex < queue.length; flushIndex++) {
+            const job = queue[flushIndex];
+            if (job) {
+                if ((process.env.NODE_ENV !== 'production')) {
+                    checkRecursiveUpdates(seen, job);
+                }
+                callWithErrorHandling(job, null, 14 /* SCHEDULER */);
+            }
+        }
+    }
+    finally {
+        flushIndex = 0;
+        queue.length = 0;
+        flushPostFlushCbs(seen); // updated
+        isFlushing = false;
+        currentFlushPromise = null;
+        if (queue.length || pendingPostFlushCbs.length) {
+            flushJobs(seen);
+        }
+    }
+}
+```
+
+## watch
+watch指定getter的返回值为依赖，当返回值变化才执行回调；
+
+watch接收两个参数，getter和callback和options；
+- getter：function | ref | reactive | array；
+- optionn：接收onStop函数，在取消监听时执行
+
+返回暂停的钩子函数，执行可以取消监听
+>vue3的watch支持监听多个变量
+
+- 1. watch内部会将getter包装为函数
+- 2. 将getter传入到effect当中，并返回runner（scheduler不再是queueJob）
+- 3. 将runner effect保存到instance的effects上，便于unMount时取消监听
+- 4. 执行runner()，即effect执行，此时activeEffect为runner，调用getter执行会将activeEffect添加到对应reactive值的deps当中。在值变化时就可以触发watch的callback执行
+- 5. 返回stop函数，调用可以取消watch监听（设置effect.active为false，effect()执行时便不再执行）
+
+
+```javascript
+const INITIAL_WATCHER_VALUE = {};
+// implementation
+function watch(source, cb, options) {
+    return doWatch(source, cb, options);
+}
+function doWatch(source, cb, { immediate, deep, flush, onTrack, onTrigger } = EMPTY_OBJ, instance = currentInstance) {
+    
+    let getter;
+    const isRefSource = isRef(source);
+    if (isRefSource) {
+        getter = () => source.value;
+    }
+    else if (isReactive(source)) {
+        getter = () => source;
+        deep = true;
+    }
+    else if (isArray(source)) {
+        getter = () => source.map(s => {
+            if (isRef(s)) {
+                return s.value;
+            }
+            else if (isReactive(s)) {
+                return traverse(s);
+            }
+            else if (isFunction(s)) {
+                return callWithErrorHandling(s, instance, 2 /* WATCH_GETTER */);
+            }
+            else {
+                (process.env.NODE_ENV !== 'production') && warnInvalidSource(s);
+            }
+        });
+    }
+    else if (isFunction(source)) {
+        if (cb) {
+            // getter with cb
+            getter = () => callWithErrorHandling(source, instance, 2 /* WATCH_GETTER */);
+        }
+        else {
+            // no cb -> simple effect
+            getter = () => {
+                if (instance && instance.isUnmounted) {
+                    return;
+                }
+                if (cleanup) {
+                    cleanup();
+                }
+                return callWithErrorHandling(source, instance, 3 /* WATCH_CALLBACK */, [onInvalidate]);
+            };
+        }
+    }
+    else {
+        getter = NOOP;
+    }
+    if (cb && deep) {
+        const baseGetter = getter;
+        getter = () => traverse(baseGetter());
+    }
+    let cleanup;
+    const onInvalidate = (fn) => {
+        cleanup = runner.options.onStop = () => {
+            callWithErrorHandling(fn, instance, 4 /* WATCH_CLEANUP */);
+        };
+    };
+    let oldValue = isArray(source) ? [] : INITIAL_WATCHER_VALUE;
+    const job = () => {
+        if (cb) {
+            // watch(source, cb)
+            const newValue = runner();
+            if (deep || isRefSource || hasChanged(newValue, oldValue)) {
+                // cleanup before running cb again
+                if (cleanup) {
+                    cleanup();
+                }
+                callWithAsyncErrorHandling(cb, instance, 3 /* WATCH_CALLBACK */, [
+                    newValue,
+                    // pass undefined as the old value when it's changed for the first time
+                    oldValue === INITIAL_WATCHER_VALUE ? undefined : oldValue,
+                    onInvalidate
+                ]);
+                oldValue = newValue;
+            }
+        }
+        else {
+            // watchEffect
+            runner();
+        }
+    };
+    // important: mark the job as a watcher callback so that scheduler knows it
+    // it is allowed to self-trigger (#1727)
+    job.allowRecurse = !!cb;
+    let scheduler;
+    if (flush === 'sync') {
+        scheduler = job;
+    }
+    else if (flush === 'post') {
+        scheduler = () => queuePostRenderEffect(job, instance && instance.suspense);
+    }
+    else {
+        // default: 'pre'
+        scheduler = () => {
+            if (!instance || instance.isMounted) {
+                queuePreFlushCb(job);
+            }
+            else {
+                // with 'pre' option, the first call must happen before
+                // the component is mounted so it is called synchronously.
+                job();
+            }
+        };
+    }
+    const runner = effect(getter, {
+        lazy: true,
+        onTrack,
+        onTrigger,
+        scheduler
+    });
+    recordInstanceBoundEffect(runner); // 将effect-runner保存到instance的effects中，便于在unMount的时候取消监听
+    // initial run
+    if (cb) {
+        if (immediate) {
+            job();
+        }
+        else {
+            oldValue = runner();
+        }
+    }
+    else if (flush === 'post') {
+        queuePostRenderEffect(runner, instance && instance.suspense);
+    }
+    else {
+        runner();
+    }
+    return () => {
+        stop(runner);
+        if (instance) {
+            remove(instance.effects, runner);
+        }
+    };
+}
 
 ```
+
+## watchEffect
+
+```javascript
+let state = reactive({name: 1});
+watchEffect(()=>{console.log(state.name)})
+```
+**不同**
+- watchEffect和watch相比，watchEffect没有回调函数；
+- watchEffect自动引入依赖，当参数中的值变化时便出发runner函数执行；watch根据oldValue变化才执行cb
+- watchEffect相较于watch，无法获取新、旧的值
+**相同**
+- 默认都在preCb中执行job()
+- 都会在setup执行的时候，都执行runner()，使监听的对象能够进行依赖收集
+
+```javascript
+// Simple effect.
+function watchEffect(effect, options) {
+    return doWatch(effect, null, options);
+}
+```
+

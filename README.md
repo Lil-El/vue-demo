@@ -29,6 +29,7 @@ rootComponent = {
     __file: "src/App.vue",
     __hmrId: "7ba5bd90"
 }
+
 ```
 
 ## 为什么Composition API可以获取到currentInstance
@@ -48,6 +49,10 @@ export default Plugin;
 因为：compositionAPI包含了一个plugin，在引用了vue.js和compositionAPI时，会执行window.Vue.use(Plugin)，将Vue注入到compositionAPI当中。
 
 ## createApp()
+
+- 通过ensureRenderer，调用createRenderer，生成唯一一个renderer渲染器；
+  - 使用ensureRenderer包装：单例模式，有renderer就返回，没有就createRenderer
+
 **runtime-dom**
 ```javascript
 // rendererOptions: 对dom操作的一些方法：remove、insert、parent等
@@ -79,8 +84,11 @@ const createApp = ((...args) => {
     return app;
 });
 ```
-- 通过ensureRenderer，调用createRenderer，生成唯一一个renderer渲染器；
-  - 使用ensureRenderer包装：单例模式，有renderer就返回，没有就createRenderer
+
+- createApp
+  - createAppContext生成一个context上下文，保存着components、provides、directive等实例
+  - 创建app，和context相互引用，同时app上还有use、provide、mixin、directive等方法；
+    - 在调用app.component、provide之类的方法时，将组件、provide的值保存到context当中
 
 **runtime-core**
 ```javascript
@@ -152,16 +160,40 @@ function createAppAPI(render, hydrate) {
     };
 }
 ```
-- createApp
-  - createAppContext生成一个context上下文，保存着components、provides、directive等实例
-  - 创建app，和context相互引用，同时app上还有use、provide、mixin、directive等方法；
-    - 在调用app.component、provide之类的方法时，将组件、provide的值保存到context当中
 
-## app.mount(container)：vue初次渲染???
+## app.mount()：vue初次渲染
 ![mount process](./public/1623225940.jpg)
 
-mount挂载时，将component生成vnode，然后render渲染到container中
+- mount挂载时，将rootComponent生成vnode，然后render渲染到container中
+    - reder -> patch -> ... -> mountComponent:
+    - 1. 创建组件的实例instance
+    - 2. setupComponent：
+      - 2.1. 执行setup函数，并将result绑定到instance上
+      - 2.2. 编译compile组件的template为render函数
+      - 2.3. 处理vue2 option api的属性和方法：data(), methods, lifecycle hooks等
+    - 3. setupRenderEffect：为组件创建rendering的effect
+      - 3.1. 执行beforeMount钩子函数
+      - 3.2. 执行instance的render方法，获取subTree（子节点的vnode）
+      - 3.3. 递归patch subTree
+      - 3.4. 将m mounted的hook函数添加到postCb的队列当中，在render执行结束后执行队列的hook函数。
+
 ```javascript
+const createApp = ((...args) => {
+    const app = ensureRenderer().createApp(...args); // createApp是上面的createApp方法
+    const { mount } = app;
+    app.mount = (container) => {
+        const component = app._component;
+        if (!isFunction(component) && !component.render && !component.template) {
+            component.template = container.innerHTML;
+        }
+        container.innerHTML = ''; // clear content before mounting
+        const proxy = mount(container);
+        container.removeAttribute('v-cloak');
+        container.setAttribute('data-v-app', '');
+        return proxy;
+    };
+    return app;
+});
 function createAppAPI(render, hydrate) {
     return function createApp(rootComponent, rootProps = null) {
         const context = createAppContext();
@@ -201,184 +233,232 @@ function createAppAPI(render, hydrate) {
         return app;
     };
 }
-const createApp = ((...args) => {
-    const app = ensureRenderer().createApp(...args); // createApp是上面的createApp方法
-    const { mount } = app;
-    app.mount = (container) => {
-        const component = app._component;
-        if (!isFunction(component) && !component.render && !component.template) {
-            component.template = container.innerHTML;
-        }
-        container.innerHTML = ''; // clear content before mounting
-        const proxy = mount(container);
-        container.removeAttribute('v-cloak');
-        container.setAttribute('data-v-app', '');
-        return proxy;
-    };
-    return app;
-});
-```
 
-render(vnode, container)
-```javascript
 const render = (vnode, container) => {
-    if (vnode == null) {
-        if (container._vnode) {
-            unmount(container._vnode, null, null, true);
-        }
-    } else {
-        // container._vnode上一次的虚拟节点
-        patch(container._vnode || null, vnode, container); // patch上一次的vnode和当前的vnode；当前是初次渲染，所以container._vnode为undefined
-    }
+    patch(container._vnode || null, vnode, container);
     flushPostFlushCbs();
-    container._vnode = vnode; // 更新container的vnode
+    container._vnode = vnode;
 };
- const setupRenderEffect = (instance, initialVNode, container, anchor, parentSuspense, isSVG, optimized) => {
-    // create reactive effect for rendering
-    instance.update = effect(function componentEffect() {
-        if (!instance.isMounted) {
-            let vnodeHook;
-            const { el, props } = initialVNode;
-            const { bm, m, parent } = instance;
-            // beforeMount hook
-            if (bm) {
-                invokeArrayFns(bm);
+const mountComponent = (initialVNode, container, anchor, parentComponent, parentSuspense, isSVG, optimized) => {
+    const instance = (initialVNode.component = createComponentInstance(initialVNode, parentComponent, parentSuspense));
+    setupComponent(instance);
+    setupRenderEffect(instance, initialVNode, container, anchor, parentSuspense, isSVG, optimized);
+};
+function setupComponent(instance, isSSR = false) {
+    isInSSRComponentSetup = isSSR;
+    const { props, children, shapeFlag } = instance.vnode;
+    const isStateful = shapeFlag & 4 /* STATEFUL_COMPONENT */;
+    initProps(instance, props, isStateful, isSSR);
+    initSlots(instance, children);
+    const setupResult = isStateful
+        ? setupStatefulComponent(instance, isSSR)
+        : undefined;
+    isInSSRComponentSetup = false;
+    return setupResult;
+}
+function setupStatefulComponent(instance, isSSR) {
+    const Component = instance.type;
+    if ((process.env.NODE_ENV !== 'production')) {
+        if (Component.name) {
+            validateComponentName(Component.name, instance.appContext.config);
+        }
+        if (Component.components) {
+            const names = Object.keys(Component.components);
+            for (let i = 0; i < names.length; i++) {
+                validateComponentName(names[i], instance.appContext.config);
             }
-            // onVnodeBeforeMount
-            if ((vnodeHook = props && props.onVnodeBeforeMount)) {
-                invokeVNodeHook(vnodeHook, parent, initialVNode);
+        }
+        if (Component.directives) {
+            const names = Object.keys(Component.directives);
+            for (let i = 0; i < names.length; i++) {
+                validateDirectiveName(names[i]);
             }
-            // render
+        }
+    }
+    // 0. create render proxy property access cache
+    instance.accessCache = {};
+    // 1. create public instance / render proxy
+    // also mark it raw so it's never observed
+    instance.proxy = new Proxy(instance.ctx, PublicInstanceProxyHandlers);
+    if ((process.env.NODE_ENV !== 'production')) {
+        exposePropsOnRenderContext(instance);
+    }
+    // 2. call setup()
+    const { setup } = Component;
+    if (setup) {
+        const setupContext = (instance.setupContext =
+            setup.length > 1 ? createSetupContext(instance) : null);
+        currentInstance = instance;
+        pauseTracking();
+        const setupResult = callWithErrorHandling(setup, instance, 0 /* SETUP_FUNCTION */, [(process.env.NODE_ENV !== 'production') ? shallowReadonly(instance.props) : instance.props, setupContext]);
+        resetTracking();
+        currentInstance = null;
+        
+        handleSetupResult(instance, setupResult);
+        
+    }
+    else {
+        finishComponentSetup(instance);
+    }
+}
+function handleSetupResult(instance, setupResult, isSSR) {
+    if (isFunction(setupResult)) {
+        // setup returned an inline render function
+        instance.render = setupResult;
+    }
+    else if (isObject(setupResult)) {
+        instance.setupState = proxyRefs(setupResult);
+        if ((process.env.NODE_ENV !== 'production')) {
+            exposeSetupStateOnRenderContext(instance);
+        }
+    }
+    finishComponentSetup(instance);
+}
+
+function finishComponentSetup(instance, isSSR) {
+    const Component = instance.type;
+    // template / render function normalization
+    if (!instance.render) {
+        // could be set from setup()
+        if (compile && Component.template && !Component.render) {
             if ((process.env.NODE_ENV !== 'production')) {
-                startMeasure(instance, `render`);
+                startMeasure(instance, `compile`);
             }
-            const subTree = (instance.subTree = renderComponentRoot(instance));
+            Component.render = compile(Component.template, {
+                isCustomElement: instance.appContext.config.isCustomElement,
+                delimiters: Component.delimiters
+            });
             if ((process.env.NODE_ENV !== 'production')) {
-                endMeasure(instance, `render`);
+                endMeasure(instance, `compile`);
             }
-            if (el && hydrateNode) {
-                if ((process.env.NODE_ENV !== 'production')) {
-                    startMeasure(instance, `hydrate`);
+        }
+        instance.render = (Component.render || NOOP);
+        // for runtime-compiled render functions using `with` blocks, the render
+        // proxy used needs a different `has` handler which is more performant and
+        // also only allows a whitelist of globals to fallthrough.
+        if (instance.render._rc) {
+            instance.withProxy = new Proxy(instance.ctx, RuntimeCompiledPublicInstanceProxyHandlers);
+        }
+    }
+    // support for 2.x options
+    if (__VUE_OPTIONS_API__) {
+        currentInstance = instance;
+        applyOptions(instance, Component);
+        currentInstance = null;
+    }
+}
+
+const setupRenderEffect = (instance, initialVNode, container, anchor, parentSuspense, isSVG, optimized) => {
+        // create reactive effect for rendering
+        instance.update = effect(function componentEffect() {
+            if (!instance.isMounted) {
+                let vnodeHook;
+                const { el, props } = initialVNode;
+                const { bm, m, parent } = instance;
+                // beforeMount hook
+                if (bm) {
+                    invokeArrayFns(bm);
                 }
-                // vnode has adopted host node - perform hydration instead of mount.
-                hydrateNode(initialVNode.el, subTree, instance, parentSuspense);
-                if ((process.env.NODE_ENV !== 'production')) {
-                    endMeasure(instance, `hydrate`);
+                const subTree = (instance.subTree = renderComponentRoot(instance));
+               
+                patch(null, subTree, container, anchor, instance, parentSuspense, isSVG);
+                initialVNode.el = subTree.el;
+                
+                // mounted hook
+                if (m) {
+                    queuePostRenderEffect(m, parentSuspense);
                 }
+                instance.isMounted = true;
             }
             else {
+                let { next, bu, u, parent, vnode } = instance;
+                let originNext = next;
+                let vnodeHook;
                 if ((process.env.NODE_ENV !== 'production')) {
-                    startMeasure(instance, `patch`);
+                    pushWarningContext(next || instance.vnode);
                 }
-                patch(null, subTree, container, anchor, instance, parentSuspense, isSVG);
+                if (next) {
+                    updateComponentPreRender(instance, next, optimized);
+                }
+                else {
+                    next = vnode;
+                }
+                next.el = vnode.el;
+                // beforeUpdate hook
+                if (bu) {
+                    invokeArrayFns(bu);
+                }
+                const nextTree = renderComponentRoot(instance);
+               
+                const prevTree = instance.subTree;
+                instance.subTree = nextTree;
+                // reset refs
+                // only needed if previous patch had refs
+                if (instance.refs !== EMPTY_OBJ) {
+                    instance.refs = {};
+                }
+                
+                patch(prevTree, nextTree, 
+                // parent may have changed if it's in a teleport
+                hostParentNode(prevTree.el), 
+                // anchor may have changed if it's in a fragment
+                getNextHostNode(prevTree), instance, parentSuspense, isSVG);
                 if ((process.env.NODE_ENV !== 'production')) {
                     endMeasure(instance, `patch`);
                 }
-                initialVNode.el = subTree.el;
+                next.el = nextTree.el;
+                if (originNext === null) {
+                    // self-triggered update. In case of HOC, update parent component
+                    // vnode el. HOC is indicated by parent instance's subTree pointing
+                    // to child component's vnode
+                    updateHOCHostEl(instance, nextTree.el);
+                }
+                // updated hook
+                if (u) {
+                    queuePostRenderEffect(u, parentSuspense);
+                }
             }
-            // mounted hook
-            if (m) {
-                queuePostRenderEffect(m, parentSuspense);
-            }
-            // onVnodeMounted
-            if ((vnodeHook = props && props.onVnodeMounted)) {
-                queuePostRenderEffect(() => {
-                    invokeVNodeHook(vnodeHook, parent, initialVNode);
-                }, parentSuspense);
-            }
-            // activated hook for keep-alive roots.
-            // #1742 activated hook must be accessed after first render
-            // since the hook may be injected by a child keep-alive
-            const { a } = instance;
-            if (a &&
-                initialVNode.shapeFlag & 256 /* COMPONENT_SHOULD_KEEP_ALIVE */) {
-                queuePostRenderEffect(a, parentSuspense);
-            }
-            instance.isMounted = true;
-        }
-        else {
-            // updateComponent
-            // This is triggered by mutation of component's own state (next: null)
-            // OR parent calling processComponent (next: VNode)
-            let { next, bu, u, parent, vnode } = instance;
-            let originNext = next;
-            let vnodeHook;
-            if ((process.env.NODE_ENV !== 'production')) {
-                pushWarningContext(next || instance.vnode);
-            }
-            if (next) {
-                updateComponentPreRender(instance, next, optimized);
-            }
-            else {
-                next = vnode;
-            }
-            next.el = vnode.el;
-            // beforeUpdate hook
-            if (bu) {
-                invokeArrayFns(bu);
-            }
-            // onVnodeBeforeUpdate
-            if ((vnodeHook = next.props && next.props.onVnodeBeforeUpdate)) {
-                invokeVNodeHook(vnodeHook, parent, next, vnode);
-            }
-            // render
-            if ((process.env.NODE_ENV !== 'production')) {
-                startMeasure(instance, `render`);
-            }
-            const nextTree = renderComponentRoot(instance);
-            if ((process.env.NODE_ENV !== 'production')) {
-                endMeasure(instance, `render`);
-            }
-            const prevTree = instance.subTree;
-            instance.subTree = nextTree;
-            // reset refs
-            // only needed if previous patch had refs
-            if (instance.refs !== EMPTY_OBJ) {
-                instance.refs = {};
-            }
-            if ((process.env.NODE_ENV !== 'production')) {
-                startMeasure(instance, `patch`);
-            }
-            patch(prevTree, nextTree, 
-            // parent may have changed if it's in a teleport
-            hostParentNode(prevTree.el), 
-            // anchor may have changed if it's in a fragment
-            getNextHostNode(prevTree), instance, parentSuspense, isSVG);
-            if ((process.env.NODE_ENV !== 'production')) {
-                endMeasure(instance, `patch`);
-            }
-            next.el = nextTree.el;
-            if (originNext === null) {
-                // self-triggered update. In case of HOC, update parent component
-                // vnode el. HOC is indicated by parent instance's subTree pointing
-                // to child component's vnode
-                updateHOCHostEl(instance, nextTree.el);
-            }
-            // updated hook
-            if (u) {
-                queuePostRenderEffect(u, parentSuspense);
-            }
-            // onVnodeUpdated
-            if ((vnodeHook = next.props && next.props.onVnodeUpdated)) {
-                queuePostRenderEffect(() => {
-                    invokeVNodeHook(vnodeHook, parent, next, vnode);
-                }, parentSuspense);
-            }
-            if ((process.env.NODE_ENV !== 'production') || __VUE_PROD_DEVTOOLS__) {
-                devtoolsComponentUpdated(instance);
-            }
-            if ((process.env.NODE_ENV !== 'production')) {
-                popWarningContext();
-            }
-        }
-    }, (process.env.NODE_ENV !== 'production') ? createDevEffectOptions(instance) : prodEffectOptions);
-};
+        }, (process.env.NODE_ENV !== 'production') ? createDevEffectOptions(instance) : prodEffectOptions);
+    };
 ```
 
-## <span style="color: red;">ssrApp.mount(container, true) ?</span>
+>2.1: setupResult-setup函数执行结果如果是对象，则会使用proxy进行代理，主要是将ref的值进行unWrap处理；
+>    这样在template部分就不需要使用.value获取ref的值
+ ```javascript
+   function unref(ref) {
+        return isRef(ref) ? ref.value : ref;
+    }
+    const shallowUnwrapHandlers = {
+        get: (target, key, receiver) => unref(Reflect.get(target, key, receiver)),
+        set: (target, key, value, receiver) => {
+            const oldValue = target[key];
+            if (isRef(oldValue) && !isRef(value)) {
+                oldValue.value = value;
+                return true;
+            }
+            else {
+                return Reflect.set(target, key, value, receiver);
+            }
+        }
+    };
+    function proxyRefs(objectWithRefs) {
+        return isReactive(objectWithRefs)
+            ? objectWithRefs
+            : new Proxy(objectWithRefs, shallowUnwrapHandlers);
+    }
+ ```
+
 ## keep-alive
-## effect
+
+## suspense
+
 ## LifeCycle Hook
+
+>在lifecycle hooks中增加了renderTracked和renderTriggered的钩子函数（rtc，rtg）
+
+onMounted，onUpdated等hooks函数执行时，会将其参数（方法或方法数组）绑定到instance对应的属性上m和u等。
+并且对hook进行wrap包装
+
 ```javascript
 
 const createHook = (lifecycle) => (hook, target = currentInstance) => 
@@ -431,3 +511,39 @@ function callWithAsyncErrorHandling(fn, instance, type, args) {
     return values;
 }
 ```
+
+在development环境下，会将renderTracked和renderTriggered的hook函数作为render effect的option传入，并且rtc和rtg接收参数：
+effect,target,key,type等；只在开发环境下有，生产环境没有这两个hook函数
+执行时机：
+    - renderTracked：在effect track()方法执行时执行rtc函数
+    - renderTriggered：在effect trigger()方法执行时执行rtg函数
+  
+```javascript
+activeEffect.options.onTrack({
+    effect: activeEffect,
+    target,
+    type,
+    key
+});
+effect.options.onTrigger({
+    effect,
+    target,
+    key,
+    type,
+    newValue,
+    oldValue,
+    oldTarget
+});
+```
+
+
+## vue如何处理update hook中的死循环问题
+在执行updated的hook时，会将队列postCb中的函数依次执行。
+
+在每次更新的时候，都会去创建一个seen（new Map），将hook的fn作为key，并记录其执行的次数；
+
+如果次数大于100，就会报错。
+
+## provide & inject
+
+应用：`vuex`和`组件传值`

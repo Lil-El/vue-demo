@@ -16,14 +16,13 @@ export default {
     const state = reactive({
       obj: 1,
     });
+    
     // onMounted([fn, fn])
-    onMounted(()=>console.log("m1"));
-    onMounted(()=>console.log("m2"));
-    setTimeout(() => {
-      state.obj = 2;
-    }, 1000);
+    onMounted(()=>state.obj = "mounted");
+    
     return {
       state,
+      handleClick
     };
     /**
      * 父组件传递 return {title:state.title} 子组件 child :title="title"；title不跟随state变化
