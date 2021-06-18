@@ -547,3 +547,71 @@ effect.options.onTrigger({
 ## provide & inject
 
 应用：`vuex`和`组件传值`
+
+## SetupContext
+context当中有一个expose，可以传入对象或函数供父级使用
+
+expose将传入的内容exposed挂载到instance上
+```
+setup(props, { attrs, slots, emit, expose }) {
+    const observed = reactive({
+        a: 1
+    })
+    function setObservedA(value) {
+        observed.a = value
+    }
+    expose({
+        setObservedA
+    })
+    return {
+        observed,
+    }
+}
+```
+```
+// comp-b.vue
+{
+  template: `
+    <comp-a ref="compa" />
+  `,
+  setup() {
+    const compa = ref(null)
+    onMounted(() => {
+      // comp-a 调用 expose 之后, 父组件 ref 拿到的结果为调用 expose 时的参数。而不再是组件实例了
+      compa.value.setObservedA(2)
+    })
+    return {
+      compa
+    }
+  }
+}
+```
+```javascript
+export function createSetupContext(instance) {
+  const expose = exposed => {
+    instance.exposed = proxyRefs(exposed)
+  }
+
+  if (__DEV__) {
+    return Object.freeze({
+      get attrs() {
+        return new Proxy(instance.attrs, attrHandlers)
+      },
+      get slots() {
+        return shallowReadonly(instance.slots)
+      },
+      get emit() {
+        return (event: string, ...args: any[]) => instance.emit(event, ...args)
+      },
+      expose
+    })
+  } else {
+    return {
+      attrs: instance.attrs,
+      slots: instance.slots,
+      emit: instance.emit,
+      expose
+    }
+  }
+}
+```
