@@ -450,7 +450,169 @@ const setupRenderEffect = (instance, initialVNode, container, anchor, parentSusp
 
 ## keep-alive
 
-## suspense
+## Suspense
+**目前是实验阶段，后期可能会有出入**
+Suspense组件用于处理在异步操作，在结果返回前展示fallback的内容；结果返回后展示default的内容；
+
+如果default部分有多个async setup，他们会同步执行（示例是6s）
+
+如果不用Suspense包裹，那么页面不展示任何内容
+
+```html
+<!-- 父组件 -->
+<Suspense>
+    <template #default>
+        <User />
+    </template>
+    <template #fallback>Loading...</template>
+</Suspense>
+
+```
+```javascript
+// 子组件User
+async setup() {
+    let getUser = () => {
+        return new Promise((res) => {
+            setTimeout(() => {
+                res();
+            }, 3000);
+        });
+    };
+    const state = await getUser();
+    return { title: 123 }; // 不返回state也可以
+}
+// 孙组件Child
+async setup() {
+    let getUser = () => {
+        return new Promise((res) => {
+            setTimeout(() => {
+                res();
+            }, 3000);
+        });
+    };
+    const state = await getUser();
+    return { title: 123 }; // 不返回state也可以
+}
+```
+
+Suspense组件挂载的时候：
+
+suspense包含了default和fallback两个分支分别是pendingBranch和activeBranch；
+
+1. 在mountSuspense的时候，会先去挂载pendingBranch（User），收集default组件下的async异步依赖
+   1. 挂载pendingBranch即mountComponent，setupComponent会执行async setup，由于setup是async的，所有setupResult是一个promise对象
+   2. 将setupResult（promise）赋给instance.asyncDep；并parentSuspense.registerDep注册依赖；将suspense的deps加1
+   3. 如果suspense的deps大于0，则去挂载fallback组件
+2. 
+
+```javascript
+const SuspenseImpl = {
+    __isSuspense: true,
+    process(n1, n2, container, anchor, parentComponent, parentSuspense, isSVG, optimized, rendererInternals) {
+        if (n1 == null) {
+            mountSuspense(n2, container, anchor, parentComponent, parentSuspense, isSVG, optimized, rendererInternals);
+        }
+        else {
+            patchSuspense(n1, n2, container, anchor, parentComponent, isSVG, optimized, rendererInternals);
+        }
+    },
+    hydrate: hydrateSuspense,
+    create: createSuspenseBoundary
+};
+const mountComponent = (initialVNode, container, anchor, parentComponent, parentSuspense, isSVG, optimized) => {
+    const instance = (initialVNode.component = createComponentInstance(initialVNode, parentComponent, parentSuspense));
+    setupComponent(instance);
+    
+    // setup() is async. This component relies on async logic to be resolved
+    // before proceeding
+    if ( instance.asyncDep) {
+        parentSuspense && parentSuspense.registerDep(instance, setupRenderEffect);
+        // Give it a placeholder if this is not hydration
+        // TODO handle self-defined fallback
+        if (!initialVNode.el) {
+            const placeholder = (instance.subTree = createVNode(Comment));
+            processCommentNode(null, placeholder, container, anchor);
+        }
+        return;
+    }
+    setupRenderEffect(instance, initialVNode, container, anchor, parentSuspense, isSVG, optimized);
+};
+function setupStatefulComponent(instance, isSSR) {
+    const Component = instance.type;
+    // 0. create render proxy property access cache
+    instance.accessCache = {};
+    // 1. create public instance / render proxy
+    // also mark it raw so it's never observed
+    instance.proxy = new Proxy(instance.ctx, PublicInstanceProxyHandlers);
+    // 2. call setup()
+    const { setup } = Component;
+    if (setup) {
+        const setupContext = (instance.setupContext =
+            setup.length > 1 ? createSetupContext(instance) : null);
+        currentInstance = instance;
+        const setupResult = callWithErrorHandling(setup, instance, 0 /* SETUP_FUNCTION */, [(process.env.NODE_ENV !== 'production') ? shallowReadonly(instance.props) : instance.props, setupContext]);
+        currentInstance = null;
+        if (isPromise(setupResult)) {
+            instance.asyncDep = setupResult;
+        }
+    }
+}
+registerDep(instance, setupRenderEffect) {
+    const hydratedEl = instance.vnode.el;
+    suspense.deps++;
+    instance
+        .asyncDep.catch(err => {
+            handleError(err, instance, 0 /* SETUP_FUNCTION */);
+        })
+        .then(asyncSetupResult => {
+            suspense.deps--;
+            // retry from this component
+            instance.asyncResolved = true;
+            const { vnode } = instance;
+            handleSetupResult(instance, asyncSetupResult);
+            if (hydratedEl) {
+                // vnode may have been replaced if an update happened before the
+                // async dep is resolved.
+                vnode.el = hydratedEl;
+            }
+            const placeholder = !hydratedEl && instance.subTree.el;
+            setupRenderEffect(instance, vnode, 
+            // component may have been moved before resolve.
+            // if this is not a hydration, instance.subTree will be the comment
+            // placeholder.
+            parentNode(hydratedEl || instance.subTree.el), hydratedEl ? null : next(instance.subTree), suspense,isSVG, optimized);
+            if (placeholder) {
+                remove(placeholder);
+            }
+            updateHOCHostEl(instance, vnode.el);
+            if ((process.env.NODE_ENV !== 'production')) {
+                popWarningContext();
+            }
+            if (suspense.deps === 0) {
+                suspense.resolve();
+            }
+        });
+}
+function mountSuspense(vnode, container, anchor, parentComponent, parentSuspense, isSVG, optimized, rendererInternals) {
+    const { p: patch, o: { createElement } } = rendererInternals;
+    const hiddenContainer = createElement('div');
+    const suspense = (vnode.suspense = createSuspenseBoundary(vnode, parentSuspense, parentComponent, container, hiddenContainer, anchor, isSVG, optimized, rendererInternals));
+    // start mounting the content subtree in an off-dom container
+    patch(null, (suspense.pendingBranch = vnode.ssContent), hiddenContainer, null, parentComponent, suspense, isSVG, optimized);
+    // now check if we have encountered any async deps
+    if (suspense.deps > 0) {
+        // has async
+        // mount the fallback tree
+        patch(null, vnode.ssFallback, container, anchor, parentComponent, null, // fallback tree will not have suspense context
+        isSVG, optimized);
+        setActiveBranch(suspense, vnode.ssFallback);
+    }
+    else {
+        // Suspense has no async deps. Just resolve.
+        suspense.resolve();
+    }
+}
+```
 
 ## LifeCycle Hook
 
@@ -615,3 +777,20 @@ export function createSetupContext(instance) {
   }
 }
 ```
+
+## defineAsyncComponent 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

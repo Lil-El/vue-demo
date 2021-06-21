@@ -1,16 +1,15 @@
 <template>
   <div @click="handleClick">
-    Effect
-    <!-- <Watch /> -->
+    <Watch />
   </div>
 </template>
 
 <script>
 import { reactive } from '@vue/reactivity';
 import { watch } from '@vue/runtime-core';
-// import Watch from "@/case/Watch/Parent.vue";
+import Watch from "@/case/Suspense/index.vue";
 export default {
-  // components: { Watch },
+  components: { Watch },
   setup(){
     let state = reactive({
       obj: 1
