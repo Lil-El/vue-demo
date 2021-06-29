@@ -500,9 +500,10 @@ Suspense组件挂载的时候：
 suspense包含了default和fallback两个分支分别是pendingBranch和activeBranch；
 
 1. 在mountSuspense的时候，会先去挂载pendingBranch（User），收集default组件下的async异步依赖
-   1. 挂载pendingBranch即mountComponent，setupComponent会执行async setup，由于setup是async的，所有setupResult是一个promise对象
-   2. 将setupResult（promise）赋给instance.asyncDep；并parentSuspense.registerDep注册依赖；将suspense的deps加1
-   3. 如果suspense的deps大于0，则去挂载fallback组件
+   1. 挂载pendingBranch即mountComponent，setupComponent会执行async setup
+   2. 由于setup是async的，所以setupResult是一个promise对象，并赋给instance.asyncDep；并parentSuspense.registerDep注册依赖；将suspense的deps加1
+   4. 如果suspense的deps大于0，则去挂载fallback组件
+   5. 否则说明setup不是async，result不是promise，则立即执行suspense.resolve()
 2. 
 
 ```javascript
@@ -576,6 +577,7 @@ registerDep(instance, setupRenderEffect) {
                 vnode.el = hydratedEl;
             }
             const placeholder = !hydratedEl && instance.subTree.el;
+            // 设置组件的effect，挂载对应组件
             setupRenderEffect(instance, vnode, 
             // component may have been moved before resolve.
             // if this is not a hydration, instance.subTree will be the comment
