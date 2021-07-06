@@ -169,7 +169,7 @@ function createAppAPI(render, hydrate) {
     - 1. 创建组件的实例instance
     - 2. setupComponent：
       - 2.1. 执行setup函数，并将result绑定到instance上
-      - 2.2. 编译compile组件的template为render函数
+      - 2.2. 编译compile组件的template或者setup返回的函数为render函数
       - 2.3. 处理vue2 option api的属性和方法：data(), methods, lifecycle hooks等
     - 3. setupRenderEffect：为组件创建rendering的effect
       - 3.1. 执行beforeMount钩子函数
@@ -359,6 +359,7 @@ const setupRenderEffect = (instance, initialVNode, container, anchor, parentSusp
                 if (bm) {
                     invokeArrayFns(bm);
                 }
+                // 执行instance.render
                 const subTree = (instance.subTree = renderComponentRoot(instance));
                
                 patch(null, subTree, container, anchor, instance, parentSuspense, isSVG);
@@ -466,8 +467,8 @@ Suspense组件用于处理在异步操作，在结果返回前展示fallback的�
     </template>
     <template #fallback>Loading...</template>
 </Suspense>
-
 ```
+
 ```javascript
 // 子组件User
 async setup() {
@@ -782,17 +783,9 @@ export function createSetupContext(instance) {
 
 ## defineAsyncComponent 
 
+## setup函数
 
-
-
-
-
-
-
-
-
-
-
-
-
-
+setup函数可以返回：
+  - 对象：供template调用
+  - 函数：将setupResult赋值给instance.render等待调用
+  - Promise：设置instance.asyncDep为setupResult；设置异步依赖为该Promise，在处理Suspense中default部分的async组件时，需要等待setupResult的结果返回

@@ -319,7 +319,7 @@ reactive(target);
         target: depsMap(new Map())
     }
     depsMap(Map): {
-        key: dep(new Set())
+        key: dep(new Set()) // name: renderEffect
     }
 ```
 
@@ -575,4 +575,53 @@ function watchEffect(effect, options) {
     return doWatch(effect, null, options);
 }
 ```
+
+
+## ref()
+
+> **triggerRef()**: 
+> ```javascript
+>   triggerRef(){
+>       trigger(ref, "set", 'value', (process.env.NODE_ENV !== 'production') ? ref.value : void 0);
+>   }
+> ```
+> 手动触发视图更新
+
+ref和reactive一样, 也是用来实现响应式数据的方法；
+
+- reactive传入对象
+- ref除了可以传入对象外，也可以传入普通变量Number，String等
+
+> 如果传入普通类型的数据，则直接赋值给this.value；但原理和reactive一致，在使用或修改ref值的时候进行数据劫持和依赖收集
+> 否则会使用reactive处理对象
+
+```javascript
+const convert = (val) => isObject(val) ? reactive(val) : val;
+class RefImpl {
+    constructor(_rawValue, _shallow = false) {
+        this._rawValue = _rawValue;
+        this._shallow = _shallow;
+        this.__v_isRef = true;
+        this._value = _shallow ? _rawValue : convert(_rawValue);
+    }
+    get value() {
+        track(toRaw(this), "get" /* GET */, 'value');
+        return this._value;
+    }
+    set value(newVal) {
+        if (hasChanged(toRaw(newVal), this._rawValue)) {
+            this._rawValue = newVal;
+            this._value = this._shallow ? newVal : convert(newVal);
+            trigger(toRaw(this), "set" /* SET */, 'value', newVal);
+        }
+    }
+}
+function createRef(rawValue, shallow = false) {
+    if (isRef(rawValue)) {
+        return rawValue;
+    }
+    return new RefImpl(rawValue, shallow);
+}
+```
+
 
