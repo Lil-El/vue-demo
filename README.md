@@ -711,7 +711,86 @@ effect.options.onTrigger({
 
 ## provide & inject
 
-应用：`vuex`和`组件传值`
+每个实例instance上的provides都是继承自父级的provides，通过Object.create(parent.provides)；
+
+根组件的provides则是Object.create(null)
+
+所以在父级provide一个值之后，任意深度的子组件都可以通过inject获取provide的值
+
+>应用：`vuex`和`组件传值`
+
+```javascript
+function createAppContext() {
+    return {
+        app: null,
+        config: {},
+        mixins: [],
+        components: {},
+        directives: {},
+        provides: Object.create(null)
+    };
+}
+function createAppAPI(render, hydrate) {
+    return function createApp(rootComponent, rootProps = null) {
+        const context = createAppContext();
+        const installedPlugins = new Set();
+        let isMounted = false;
+        const app = (context.app = {
+            _uid: uid++,
+            _component: rootComponent,
+            _props: rootProps,
+            _container: null,
+            _context: context,
+            version,
+            use(plugin, ...options) {},
+            provide(key, value) {
+                context.provides[key] = value;
+                return app;
+            }
+        });
+        return app;
+    };
+}
+function createComponentInstance(vnode, parent, suspense) {
+    const type = vnode.type;
+    const appContext = (parent ? parent.appContext : vnode.appContext) || emptyAppContext;
+    const instance = {
+        uid: uid$1++,
+        vnode,
+        type,
+        parent,
+        appContext,
+        root: null,
+        provides: parent ? parent.provides : Object.create(appContext.provides),
+        accessCache: null,
+    };
+    return instance;
+}
+
+export function provide(key, value) {
+    let provides = currentInstance.provides;
+    const parentProvides = currentInstance.parent && currentInstance.parent.provides;
+    if (parentProvides === provides) {
+        provides = currentInstance.provides = Object.create(parentProvides);
+    }
+    provides[key] = value;
+}
+function inject(key, defaultValue, treatDefaultAsFactory = false) {
+    const instance = currentInstance || currentRenderingInstance;
+    if (instance) {
+        const provides = instance.provides;
+        if (key in provides) {
+            return provides[key];
+        }
+        else if (arguments.length > 1) {
+            return treatDefaultAsFactory && isFunction(defaultValue)
+                ? defaultValue()
+                : defaultValue;
+        }
+    }
+}
+
+```
 
 ## SetupContext
 context当中有一个expose，可以传入对象或函数供父级使用

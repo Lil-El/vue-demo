@@ -1,7 +1,6 @@
 # Reactivity - Vue3响应式原理
 `数据劫持` `依赖收集`
 
-
 在vue3中定义响应式对象，用法如下：
 ```javascript
 import {reactive} from 'vue';
