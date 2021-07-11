@@ -864,7 +864,9 @@ export function createSetupContext(instance) {
 
 ## setup函数
 
+返回值、以及返回值为函数时，render方法的内部调用
+
 setup函数可以返回：
   - 对象：供template调用
   - 函数：将setupResult赋值给instance.render等待调用
-  - Promise：设置instance.asyncDep为setupResult；设置异步依赖为该Promise，在处理Suspense中default部分的async组件时，需要等待setupResult的结果返回
+  - Promise(只是方法内部包含async await， 并不是return了promise)：设置instance.asyncDep为setupResult；设置异步依赖为该Promise，在处理Suspense中default部分的async组件时，需要等待setupResult的结果返回
