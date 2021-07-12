@@ -942,6 +942,70 @@ function useCssModule(name = '$style') {
 > setup返回jsx时，无法使用scoped的样式，由于挂载节点的时候，jsx的节点和本身组件的scopeId不一致，导致将jsx的节点认为是slot插槽节点，jsx的scopeId等于自身组件scopeId + "-s"；所以scoped的样式不会生效；
 > 所以需要在返回jsx的时候，通过withScopeId进行包裹，将父级的scopeId赋给jsx节点的scopeId。此时jsx的scoped样式才会生效
 
+## withScopeId
+
+将包裹的节点的scopeId设置为传入的scopeId
+
+```js
+setup() {
+    let ins = getCurrentInstance();
+    let withId = withScopeId(ins.type.__scopeId); // {$mino.container}
+    let jsx = () => <div class="container"></div>;
+    return withId(jsx) // 使用withScopeId包裹
+    return jsx; // JSX无法使用scoped中的样式
+},
+// module的样式无法使用
+<style lang="sass" scoped>
+.container
+    background-color: yellow
+    width: 100px
+    height: 100px
+</style>
+```
+
+```js
+function withCtx(fn, ctx = currentRenderingInstance) {
+    if (!ctx)
+        return fn;
+    const renderFnWithContext = (...args) => {
+        // If a user calls a compiled slot inside a template expression (#1745), it
+        // can mess up block tracking, so by default we need to push a null block to
+        // avoid that. This isn't necessary if rendering a compiled `<slot>`.
+        if (!isRenderingCompiledSlot) {
+            openBlock(true /* null block that disables tracking */);
+        }
+        const owner = currentRenderingInstance;
+        setCurrentRenderingInstance(ctx);
+        const res = fn(...args);
+        setCurrentRenderingInstance(owner);
+        if (!isRenderingCompiledSlot) {
+            closeBlock();
+        }
+        return res;
+    };
+    renderFnWithContext._c = true;
+    return renderFnWithContext;
+}
+
+let currentScopeId = null;
+const scopeIdStack = [];
+function pushScopeId(id) {
+    scopeIdStack.push((currentScopeId = id));
+}
+function popScopeId() {
+    scopeIdStack.pop();
+    currentScopeId = scopeIdStack[scopeIdStack.length - 1] || null;
+}
+function withScopeId(id) {
+    return ((fn) => withCtx(function () {
+        pushScopeId(id);
+        const res = fn.apply(this, arguments);
+        popScopeId();
+        return res;
+    }));
+}
+```
+
 ## useCssVars
 
 > 代码中包含<\style scoped>的时候，会生成一个scopedId，保存到instance的type上
