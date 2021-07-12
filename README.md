@@ -868,5 +868,158 @@ export function createSetupContext(instance) {
 
 setup函数可以返回：
   - 对象：供template调用
-  - 函数：将setupResult赋值给instance.render等待调用
+  - 函数：将setupResult赋值给instance.render等待调用，render函数需要返回虚拟节点
+    ```javascript
+        // class="container"  == className="container"
+        setup() {
+            return () => (
+                <div class="container"> 
+                    <span>MINO</span>
+                </div>
+            );
+        },
+    ```
+    ```javascript
+        setup() {
+            return () => {
+                let vnode = createVNode("div", {className: "container"})
+                return vnode;
+            };
+        },
+    ```
   - Promise(只是方法内部包含async await， 并不是return了promise)：设置instance.asyncDep为setupResult；设置异步依赖为该Promise，在处理Suspense中default部分的async组件时，需要等待setupResult的结果返回
+
+# Runtime-Core 其他的导出
+
+## useCssModule
+
+- 给style添加module属性，在template中使用$style调用；
+- 可以为module添加名称，需要引入useCssModule定义该module，并导出
+- html不使用cssModule时，无法使用style module的样式 （module的样式只能通过cssModule方式使用，否则不生效）
+
+使用：
+```vue
+<template>
+    <div :class="$mino.container"></div>
+</template>
+
+<script>
+import { useCssModule } from "vue";
+export default {
+    props: ["name"],
+    setup() {
+        let $mino = useCssModule("mino");
+        // return () => <div class={$mino.container}></div>  // JSX无法使用scoped中的样式
+        return { $mino }
+    },
+};
+</script>
+
+<style lang="sass" scoped module>
+// 默认module是 $style
+.container
+    background-color: green
+    width: 100px
+    height: 100px
+</style>
+<style lang="sass" scoped module="mino">
+.container
+    background-color: red
+    width: 100px
+    height: 100px
+</style>
+```
+
+Source Code：
+```js
+function useCssModule(name = '$style') {
+    const instance = getCurrentInstance();
+    const modules = instance.type.__cssModules;
+    const mod = modules[name];
+    return mod;
+}
+```
+> setup返回jsx时，无法使用scoped的样式，由于挂载节点的时候，jsx的节点和本身组件的scopeId不一致，导致将jsx的节点认为是slot插槽节点，jsx的scopeId等于自身组件scopeId + "-s"；所以scoped的样式不会生效；
+> 所以需要在返回jsx的时候，通过withScopeId进行包裹，将父级的scopeId赋给jsx节点的scopeId。此时jsx的scoped样式才会生效
+
+## useCssVars
+
+> 代码中包含<\style scoped>的时候，会生成一个scopedId，保存到instance的type上
+
+为当前节点注入css变量
+```js
+useCssVars((ctx)=>{
+    return {
+        root: "red"
+    }
+}) // 第二个参数为true时，会添加scopeId：--[scopeId]-root
+// css
+.container{
+    background: var(--root)
+}
+```
+
+```js
+function useCssVars(getter, scoped = false) {
+    const instance = getCurrentInstance();
+    const prefix = scoped && instance.type.__scopeId
+        ? `${instance.type.__scopeId.replace(/^data-v-/, '')}-`
+        : ``;
+    onMounted(() => {
+        watchEffect(() => {
+            setVarsOnVNode(instance.subTree, getter(instance.proxy), prefix);
+        });
+    });
+}
+function setVarsOnVNode(vnode, vars, prefix) {
+    if ( vnode.shapeFlag & 128 /* SUSPENSE */) {
+        const suspense = vnode.suspense;
+        vnode = suspense.activeBranch;
+        if (suspense.pendingBranch && !suspense.isHydrating) {
+            suspense.effects.push(() => {
+                setVarsOnVNode(suspense.activeBranch, vars, prefix);
+            });
+        }
+    }
+    // drill down HOCs until it's a non-component vnode
+    while (vnode.component) {
+        vnode = vnode.component.subTree;
+    }
+    if (vnode.shapeFlag & 1 /* ELEMENT */ && vnode.el) {
+        const style = vnode.el.style;
+        for (const key in vars) {
+            style.setProperty(`--${prefix}${key}`, unref(vars[key]));
+        }
+    }
+    else if (vnode.type === Fragment) {
+        vnode.children.forEach(c => setVarsOnVNode(c, vars, prefix));
+    }
+}
+
+```
+
+## toHandlers
+
+For prefixing keys in v-on="obj" with "on"
+
+为v-on="obj"的key添加前缀"on"
+
+> v-on="obj"；obj = {click: ()=>{}, mousemove: ()=>{}}；
+```js
+let handlers = toHandlers({
+    xyz: ()=>{}
+})
+// 转换为 
+hanlers = {
+    onXyz: ()=>{}
+}
+```
+# Vue指令
+
+## v-on
+
+- v-on="{click: NOOP, mousemove: NOOP}"
+- v-on:click=""
+- v-on:click.stop=""
+- v-on:\[event\]=""
+- @click.stop=""
