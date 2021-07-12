@@ -1,7 +1,7 @@
 <template>
-    <div @click="handleClick">
+    <!-- <div @click="handleClick"> -->
         <Watch name="setUp" />
-    </div>
+    <!-- </div> -->
 </template>
 
 <script>

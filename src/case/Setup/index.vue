@@ -1,10 +1,8 @@
+<template>
+    <div class="container"></div>
+</template>
 
 <script>
-// <template>
-//     <div class="container">
-//         <div>MINO</div>
-//     </div>
-// </template>
 import { useCssVars, useCssModule, withScopeId, getCurrentInstance } from "vue";
 export default {
     props: ["name"],
@@ -19,11 +17,11 @@ export default {
         console.log(ins.type.__scopeId);
         let withId = withScopeId(ins.type.__scopeId); // {$mino.container}
         let jsx = () => <div class="container"></div>;
-        return withId(jsx) // 使用withScopeId包裹
-        return jsx; // JSX无法使用scoped中的样式
-        // return {
-        //     $mino,
-        // };
+        // return withId(jsx) // 使用withScopeId包裹
+        // return jsx; // JSX无法使用scoped中的样式
+        return {
+            // $mino,
+        };
     },
 };
 </script>

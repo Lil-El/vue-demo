@@ -451,6 +451,8 @@ const setupRenderEffect = (instance, initialVNode, container, anchor, parentSusp
 
 ## keep-alive
 
+// TODO:
+
 ## Suspense
 **目前是实验阶段，后期可能会有出入**
 Suspense组件用于处理在异步操作，在结果返回前展示fallback的内容；结果返回后展示default的内容；
@@ -945,6 +947,8 @@ function useCssModule(name = '$style') {
 ## withScopeId
 
 将包裹的节点的scopeId设置为传入的scopeId
+jsx的节点的scopeId为空，所以等于父级scopeId + “-s”；所以自身的scopeId的样式不生效
+template的scopeId有值，所以可以正常使用scope的样式
 
 ```js
 setup() {
