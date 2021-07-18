@@ -19,6 +19,10 @@ let state = reactive({
     ```
 ## Reactive
 `reactivity.esm-bundler.js`
+
+reactive一个对象时，在获取对象属性时，如果该属性值是obj，会lazy对这个obj再次进行reactive；
+shallowReactive，则遇到属性值为对象时，不会处理，只对最浅的一层属性进行数据劫持
+
 ```javascript
 fn reactivity(target){
     return createReactiveObject(target, false, baseHandlers, collectionHandlers)
@@ -140,6 +144,88 @@ function createSetter(shallow = false) {
     };
 }
 ```
+
+
+
+## shallowReactive
+- set：原始对象属性值为ref时，reactive设置该属性的时候，会修改ref.value；shallow则直接修改这个属性值
+- get: 原始值为obj时，reactive对这个对象再次进行reactive处理；shallow直接返回该obj
+- get：原始值为ref时，reactive对这个ref进行unWrap再返回；shallow直接返回
+
+
+```js
+const shallowSet = /*#__PURE__*/ createSetter(true);
+function createSetter(shallow = false) {
+    return function set(target, key, value, receiver) {
+        const oldValue = target[key];
+        if (!shallow) {
+            value = toRaw(value);
+            if (!isArray(target) && isRef(oldValue) && !isRef(value)) {
+                oldValue.value = value;
+                return true;
+            }
+        }
+        const hadKey = isArray(target) && isIntegerKey(key)
+            ? Number(key) < target.length
+            : hasOwn(target, key);
+        const result = Reflect.set(target, key, value, receiver);
+        // don't trigger if target is something up in the prototype chain of original
+        if (target === toRaw(receiver)) {
+            if (!hadKey) {
+                trigger(target, "add" /* ADD */, key, value);
+            }
+            else if (hasChanged(value, oldValue)) {
+                trigger(target, "set" /* SET */, key, value, oldValue);
+            }
+        }
+        return result;
+    };
+}
+function createGetter(isReadonly = false, shallow = false) {
+    return function get(target, key, receiver) {
+        if (key === "__v_isReactive" /* IS_REACTIVE */) {
+            return !isReadonly;
+        }
+        else if (key === "__v_isReadonly" /* IS_READONLY */) {
+            return isReadonly;
+        }
+        else if (key === "__v_raw" /* RAW */ &&
+            receiver === (isReadonly ? readonlyMap : reactiveMap).get(target)) {
+            return target;
+        }
+        const targetIsArray = isArray(target);
+        if (targetIsArray && hasOwn(arrayInstrumentations, key)) {
+            return Reflect.get(arrayInstrumentations, key, receiver);
+        }
+        const res = Reflect.get(target, key, receiver);
+        const keyIsSymbol = isSymbol(key);
+        if (keyIsSymbol
+            ? builtInSymbols.has(key)
+            : key === `__proto__` || key === `__v_isRef`) {
+            return res;
+        }
+        if (!isReadonly) {
+            track(target, "get" /* GET */, key);
+        }
+        if (shallow) {
+            return res;
+        }
+        if (isRef(res)) {
+            // ref unwrapping - does not apply for Array + integer key.
+            const shouldUnwrap = !targetIsArray || !isIntegerKey(key);
+            return shouldUnwrap ? res.value : res;
+        }
+        if (isObject(res)) {
+            // Convert returned value into a proxy as well. we do the isObject check
+            // here to avoid invalid value warning. Also need to lazy access readonly
+            // and reactive here to avoid circular dependency.
+            return isReadonly ? readonly(res) : reactive(res);
+        }
+        return res;
+    };
+}
+```
+
 
 ## Effect
 ```javascript
@@ -622,5 +708,3 @@ function createRef(rawValue, shallow = false) {
     return new RefImpl(rawValue, shallow);
 }
 ```
-
-
