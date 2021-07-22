@@ -6,7 +6,7 @@
 
 <script>
 import { reactive } from "@vue/reactivity";
-import Watch from "@/case/Setup/index.vue";
+import Watch from "@/case/Computed/index.vue";
 import { watch } from "vue";
 export default {
     components: { Watch },

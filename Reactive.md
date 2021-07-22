@@ -708,3 +708,9 @@ function createRef(rawValue, shallow = false) {
     return new RefImpl(rawValue, shallow);
 }
 ```
+
+### Computed内部修改依赖的变量，会不会导致死循环
+
+不会，因为第一次变量更新后，触发computed的effect执行；
+effect执行，又会修改变量；变量变动再次去trigger，让computed的effect执行；
+但是第二次trigger，发现depsMap的effect和activeEffect一致，所以不会让effect再次执行
