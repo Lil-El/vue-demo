@@ -709,8 +709,47 @@ function createRef(rawValue, shallow = false) {
 }
 ```
 
-### Computed内部修改依赖的变量，会不会导致死循环
+## Computed
 
-不会，因为第一次变量更新后，触发computed的effect执行；
-effect执行，又会修改变量；变量变动再次去trigger，让computed的effect执行；
-但是第二次trigger，发现depsMap的effect和activeEffect一致，所以不会让effect再次执行
+Computed基于Effect；和watch类似；
+
+- 页面初渲染，renderEffect，访问到了computed value；computed进行track，将computed和renderEffect保存到targetMap当中；
+- 获取computed value（执行Effect，activeEffect为computedEffect），又访问到了响应的variable；variable去track，进行依赖收集，将variable和computedEffect保存到了targetMap中
+  
+- 页面更新，修改variable值，触发其trigger set；将variable的depsMap中的effects获取到并执行；computedEffect被执行
+- computedEffect的scheduler再去trigger set；将computed的depsMap的effects获取并执行；renderEffect被执行
+- renderEffect执行queueJob，等待异步更新；
+- Promise.then时，页面重新渲染，再次获取computed的value，此时computed的effect()执行，执行**getter()**；获取getter结果并返回；
+  
+>如果在getter()的时候再去更新computed所侦听的值，也不会死循环，因为variable更新时，将targetMap的deps的effect获取到，依次更新，但是更新的时候会判断effect时候等于activeEffect；所以在variable在getter中再次更新时，由于effect === activeEffect所以computed不会再次执行；所以不会死循环
+
+```js
+class ComputedRefImpl {
+    constructor(getter, _setter, isReadonly) {
+        this._setter = _setter;
+        this._dirty = true;
+        this.__v_isRef = true;
+        this.effect = effect(getter, {
+            lazy: true,
+            scheduler: () => {
+                if (!this._dirty) {
+                    this._dirty = true;
+                    trigger(toRaw(this), "set" /* SET */, 'value');
+                }
+            }
+        });
+        this["__v_isReadonly" /* IS_READONLY */] = isReadonly;
+    }
+    get value() {
+        if (this._dirty) {
+            this._value = this.effect();
+            this._dirty = false;
+        }
+        track(toRaw(this), "get" /* GET */, 'value');
+        return this._value;
+    }
+    set value(newValue) {
+        this._setter(newValue);
+    }
+}
+```
