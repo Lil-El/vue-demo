@@ -753,3 +753,85 @@ class ComputedRefImpl {
     }
 }
 ```
+
+## targetMap保存了target，key，effect的映射；为何effect也要保存deps?
+
+*问题的流程：*
+```js
+fn track(){
+    targetMap.set(target, depsMap = new Map());
+    depsMap.set(key, deps = new Set())
+    deps.add(activeEffect);
+    activeEffect.deps.push(deps); // why?
+}
+// trigger时将targetMap中的target的depsMap的key的dep（Set）中所有的effect执行；
+
+// renderEffect执行，会先cleanup(renderEffect)，然后去再让fn()；
+
+function cleanup(effect) {
+    const { deps } = effect;
+    if (deps.length) {
+        for (let i = 0; i < deps.length; i++) {
+            deps[i].delete(effect);
+        }
+        deps.length = 0;
+    }
+}
+
+```
+
+**实现：**
+
+```js
+// templete
+<div v-if="isShow">{{computed}}</div>
+// js
+computed: {
+    computed(){
+        return this.variable1
+    },
+    data(){
+        return {isShow: true}
+    },
+    methods:{onChange(){this.isShow = false}}
+}
+```
+
+- 数据data：computed，computed所依赖的变量variable1，控制展示的isShow = true；
+- 页面：页面< v-if=isShow>{{computed}}</>
+- 初始时：
+  - a.页面获取isShow，targetMap的isShow的dep：Set(renderEffect)
+  - b.页面获取computed，targetMap的computed的dep：Set(renderEffect)
+  - c.computed获取variable1，targetM的variable1的dep：Set(computedEffect)
+- 更新时-isShow = false：
+  - isShow trigger，renderEffect更新
+  - renderEffect执行，cleanup(renderEffect)；清空所有a、b的dep中的renderEffect
+  - renderEffect的fn()，页面渲染
+  - 此时不展示computed的值
+
+**描述：**
+- 初始时：renderEffect依赖computed和isShow两个变量。所以computed和isShow各自的dep中都包含renderEffect
+- 当onChange执行后，renderEffect执行的时候，renderEffect将computed和variable1中dep中的renderEffect删除，并清空renderEffect的deps；
+- 页面重新渲染，isShow为false，computed不再展示；所以computed的get value()并不会再次执行，进而computed不会再次进行track renderEffect；此时只有isShow被renderEffect依赖，computed不再被依赖；；所以只有isShow的dep中包含renderEffect，computed的dep中没有了renderEffect。这便是activeEffect收集它所依赖的数据的dep的原因
+- 如果不清空renderEffect的deps中收集的dep中的自己，那么variable变化就会导致页面的更新
+
+
+**结论：**
+由于页面更新后数据所依赖的dep effect发生变化，所以需要在每个effect执行时，将所有依赖自己(effect)的targetMap中的dep中的自己删掉。
+在effect中fn执行的时候，重新进行依赖收集
+
+
+### 两个变量同时修改，如何将重复的刷新过滤掉
+
+- 第一个修改，trigger，将renderEffect scheduler执行queueJob，将Job（effect）加入到queue中；
+- 第二个修改，trigger，将renderEffect scheduler执行queueJob，但是queue已经存在了Job（renderEffect），所以renderEffect不会重复插入到queue当中
+
+
+```js
+// templete
+{{variable1}}
+{{variable2}}
+{{variable3}}
+// 
+
+```
