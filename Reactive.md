@@ -796,6 +796,7 @@ computed: {
     methods:{onChange(){this.isShow = false}}
 }
 ```
+>普通的data也是一样，两个data，初始时展示，第二次一个不展示，就需要情况renderEffect
 
 - 数据data：computed，computed所依赖的变量variable1，控制展示的isShow = true；
 - 页面：页面< v-if=isShow>{{computed}}</>
@@ -817,6 +818,8 @@ computed: {
 
 
 **结论：**
+多个数据在页面上展示，当数据更新的时候，某个数据不需要再次进行展示了，那么需要将改数据的deps中的renderEffect清空，避免造成页面重复渲染。
+
 由于页面更新后数据所依赖的dep effect发生变化，所以需要在每个effect执行时，将所有依赖自己(effect)的targetMap中的dep中的自己删掉。
 在effect中fn执行的时候，重新进行依赖收集
 
