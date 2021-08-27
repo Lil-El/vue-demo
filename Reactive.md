@@ -1,4 +1,4 @@
-# Reactivity - Vue3响应式原理
+# Vue3: 响应式原理 - Reactivity
 `数据劫持` `依赖收集`
 
 在vue3中定义响应式对象，用法如下：
@@ -144,9 +144,6 @@ function createSetter(shallow = false) {
     };
 }
 ```
-
-
-
 ## shallowReactive
 - set：原始对象属性值为ref时，reactive设置该属性的时候，会修改ref.value；shallow则直接修改这个属性值
 - get: 原始值为obj时，reactive对这个对象再次进行reactive处理；shallow直接返回该obj
