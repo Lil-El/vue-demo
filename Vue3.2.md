@@ -142,6 +142,14 @@ const finalizeDepMarkers = (effect) => {
 };
 ```
 
+3.2中track逻辑被拆分为track和trackEffects两部分；trigger相同；
+
+- track主要为了从targetMap的target的key中获取dep，并初始化对应的key、dep对象
+- trackEffect为dep添加effect
+
+3.2前，由于ref等对象的依赖收集、派发通知每次需要track，使得每次要对target、key等属性进行判断操作；
+3.2，对track进行拆分，ref从以前的执行track全部变为只执行trackEffects部分，trigger一样；减少判断操作，从而达到优化效果；
+
 ```js
 function track(target, type, key) {
     let depsMap = targetMap.get(target);
@@ -336,15 +344,145 @@ function effect(fn, options) {
 }
 ```
 
+trackOpBit设计：每一层effect需要为trackOpBit左移一位，表示当前层的标记
 
+初始化：dep收集了effect；
+1. 变量变化：effect.run执行，先initDepMarkers初始化依赖标记，给dep.w赋值为trackOpBit；
+         变量的getter->track->  此时dep.n = 0;所以需要被收集dep.n赋值为trackOpBit；
+         run结束时：判断如果 (被收集了&&不是新的dep) 需要被清除掉，**没被清除掉**，然后w和n &= ^trackOpBit 清空状态
+2. 变量不展示：effect.run执行，先initDepMarkers初始化依赖标记，给dep.w赋值为trackOpBit；
+              变量的getter->track没有执行  此时dep.n = 0
+              run结束时：判断如果 (被收集了&&不是新的dep) 需要被清除掉，**被清除掉**，然后w和n &= ^trackOpBit 清空状态
 
+## Vue3.2 ref优化
 
+3.2中track逻辑被拆分为track和trackEffects两部分；trigger相同；
 
+- track主要为了从targetMap的target的key中获取dep，并初始化对应的key、dep对象
+- trackEffect为dep添加effect
 
+3.2前，由于ref等对象的依赖收集、派发通知每次需要track，使得每次要对target、key等属性进行判断操作；
+3.2，对track进行拆分，ref从以前的执行track全部变为只执行trackEffects部分，trigger一样；减少判断操作，从而达到优化效果；
 
+3.2以前的ref代码：
 
+```js
+function ref(value) {
+  return createRef(value)
+}
 
+const convert = (val) => isObject(val) ? reactive(val) : val
 
+function createRef(rawValue, shallow = false) {
+  if (isRef(rawValue)) {
+    // 如果传入的就是一个 ref，那么返回自身即可，处理嵌套 ref 的情况。
+    return rawValue
+  }
+  return new RefImpl(rawValue, shallow)
+}
+
+class RefImpl {
+  constructor(_rawValue, _shallow = false) {
+    this._rawValue = _rawValue
+    this._shallow = _shallow
+    this.__v_isRef = true
+    // 非 shallow 的情况，如果它的值是对象或者数组，则递归响应式
+    this._value = _shallow ? _rawValue : convert(_rawValue)
+  }
+  get value() {
+    // 给 value 属性添加 getter，并做依赖收集
+    track(toRaw(this), 'get' /* GET */, 'value')
+    return this._value
+  }
+  set value(newVal) {
+    // 给 value 属性添加 setter
+    if (hasChanged(toRaw(newVal), this._rawValue)) {
+      this._rawValue = newVal
+      this._value = this._shallow ? newVal : convert(newVal)
+      // 派发通知
+      trigger(toRaw(this), 'set' /* SET */, 'value', newVal)
+    }
+  }
+}
+```
+
+3.2的ref代码
+
+```js
+class RefImpl {
+  constructor(value, _shallow = false) {
+    this._shallow = _shallow
+    this.dep = undefined
+    this.__v_isRef = true
+    this._rawValue = _shallow ? value : toRaw(value)
+    this._value = _shallow ? value : convert(value)
+  }
+  get value() {
+    trackRefValue(this)
+    return this._value
+  }
+  set value(newVal) {
+    newVal = this._shallow ? newVal : toRaw(newVal)
+    if (hasChanged(newVal, this._rawValue)) {
+      this._rawValue = newVal
+      this._value = this._shallow ? newVal : convert(newVal)
+      triggerRefValue(this, newVal)
+    }
+  }
+}
+
+function trackRefValue(ref) {
+  if (isTracking()) {
+    ref = toRaw(ref)
+    if (!ref.dep) {
+      ref.dep = createDep()
+    }
+    if ((process.env.NODE_ENV !== 'production')) {
+      trackEffects(ref.dep, {
+        target: ref,
+        type: "get" /* GET */,
+        key: 'value'
+      })
+    }
+    else {
+      trackEffects(ref.dep)
+    }
+  }
+}
+function triggerRefValue(ref, newVal) {
+  ref = toRaw(ref)
+  if (ref.dep) {
+    if ((process.env.NODE_ENV !== 'production')) {
+      triggerEffects(ref.dep, {
+        target: ref,
+        type: "set" /* SET */,
+        key: 'value',
+        newValue: newVal
+      })
+    }
+    else {
+      triggerEffects(ref.dep)
+    }
+  }
+}
+
+function triggerEffects(dep, debuggerEventExtraInfo) {
+  for (const effect of isArray(dep) ? dep : [...dep]) {
+    if (effect !== activeEffect || effect.allowRecurse) {
+      if ((process.env.NODE_ENV !== 'production') && effect.onTrigger) {
+        effect.onTrigger(extend({ effect }, debuggerEventExtraInfo))
+      }
+      if (effect.scheduler) {
+        effect.scheduler()
+      }
+      else {
+        effect.run()
+      }
+    }
+  }
+}
+
+```
 
 
 [1]: https://juejin.cn/post/6995732683435278344#heading-6
